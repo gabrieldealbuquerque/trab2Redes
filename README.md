@@ -1,9 +1,5 @@
 # trab2Redes
 
-Com certeza. Um bom `README.md` é essencial para documentar a arquitetura e o estado atual do projeto, especialmente quando estamos construindo protocolos de rede manualmente.
-
-Aqui está o arquivo `README.md` formatado para o estágio atual do nosso projeto.
-
 -----
 
 # PyRemoteDesktop (Core/Base)
@@ -61,7 +57,7 @@ pip install opencv-python numpy mss pynput
 
 *(Nota: `pynput` será usado na próxima fase para o controle de mouse/teclado).*
 
-## ▶Como Executar
+## Como Executar
 
 Para testar localmente (na mesma máquina) ou em rede local (LAN):
 
@@ -100,11 +96,3 @@ Este projeto evita o problema comum de *TCP Stream Fragmentation* (onde uma imag
 
 1.  **Sender:** Calcula `len(dados)` -\> Empacota em 4 bytes (Big Endian) -\> Envia `[HEADER][PAYLOAD]`.
 2.  **Receiver:** Lê exatamente 4 bytes -\> Descobre o tamanho `N` -\> Loop de leitura até obter `N` bytes -\> Processa a imagem.
-
------
-
-### Próximos Passos
-
-Agora que temos o `README.md` e os arquivos base prontos e entendemos o que temos em mãos, podemos prosseguir para a **implementação do controle de Mouse e Teclado**.
-
-**Você gostaria que eu avançasse para a implementação do controle remoto (Input) agora?**

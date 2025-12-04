@@ -1,51 +1,76 @@
+# server.py
 import socket
 import threading
+
 import cv2
 import numpy as np
 import mss
-from utils import send_msg
 
-HOST = '0.0.0.0' # Ouve em todas as interfaces
+from protocol import create_server_socket, send_frame
+
+HOST = "0.0.0.0"
 PORT = 9999
 
-def start_server():
-    server_socket = socket.socket(socket.socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((HOST, PORT))
-    server_socket.listen(1)
-    print(f"[*] Servidor aguardando conexão em {HOST}:{PORT}...")
 
-    conn, addr = server_socket.accept()
-    print(f"[+] Conectado a: {addr}")
+def capture_and_send_loop(conn: socket.socket, addr):
+    print(f"[+] Cliente conectado: {addr}")
 
     try:
-        # Inicializa captura de tela otimizada com mss
         with mss.mss() as sct:
-            # Pega as dimensões do monitor principal
-            monitor = sct.monitors[1] 
-            
+            monitor = sct.monitors[1]  # monitor principal [web:19]
             while True:
-                # 1. Captura a tela
+                # 1. Captura tela (raw pixels)
                 screenshot = sct.grab(monitor)
-                
-                # 2. Converte para formato que o OpenCV/Numpy entende
-                img_np = np.array(screenshot)
-                
-                # 3. Converte de BGRA para BGR (remove canal alfa se houver)
-                frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
-                
-                # 4. Comprime a imagem (JPEG) para enviar pela rede
-                # 'quality' vai de 0 a 100. 50 é um bom balanço vel/qualidade
-                encoded, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
-                
-                # 5. Envia os bytes
-                data = buffer.tobytes()
-                send_msg(conn, data)
-                
+
+                # 2. Converte para numpy array
+                frame_bgra = np.array(screenshot)
+
+                # 3. BGRA -> BGR
+                frame = cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2BGR)
+
+                # 4. Comprime em JPEG
+                ok, buffer = cv2.imencode(
+                    ".jpg",
+                    frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, 50],
+                )
+                if not ok:
+                    # se der erro raro de encode, pula o frame
+                    continue
+
+                jpeg_bytes = buffer.tobytes()
+
+                # 5. Envia via nosso framing manual
+                send_frame(conn, jpeg_bytes)
+
+    except (ConnectionError, OSError) as e:
+        print(f"[!] Conexão com {addr} encerrada: {e}")
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"[!] Erro inesperado com {addr}: {e}")
     finally:
         conn.close()
-        server_socket.close()
+        print(f"[-] Cliente desconectado: {addr}")
 
-if __name__ == '__main__':
+
+def start_server():
+    server_sock = create_server_socket(HOST, PORT)
+    print(f"[*] Servidor aguardando em {HOST}:{PORT}...")
+
+    try:
+        while True:
+            conn, addr = server_sock.accept()
+            # Cada cliente em uma thread (modelo simples, didático). [web:33][web:51]
+            t = threading.Thread(
+                target=capture_and_send_loop,
+                args=(conn, addr),
+                daemon=True,
+            )
+            t.start()
+    except KeyboardInterrupt:
+        print("\n[!] Encerrando servidor...")
+    finally:
+        server_sock.close()
+
+
+if __name__ == "__main__":
     start_server()

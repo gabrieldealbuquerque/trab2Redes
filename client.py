@@ -1,48 +1,60 @@
-import socket
+# client.py
 import cv2
 import numpy as np
-from utils import recv_msg
 
-# Coloque o IP do computador servidor aqui
-SERVER_IP = '127.0.0.1' 
+from protocol import create_client_socket, recv_frame
+
+SERVER_HOST = "127.0.0.1"  # ajustar para IP da máquina servidor
 SERVER_PORT = 9999
 
 def start_client():
-    client_socket = socket.socket(socket.socket.AF_INET, socket.SOCK_STREAM)
+    sock = create_client_socket(SERVER_HOST, SERVER_PORT)
+    print(f"[+] Conectado ao servidor {SERVER_HOST}:{SERVER_PORT}")
+
+    cv2.namedWindow("Remote Screen", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Remote Screen", 800, 600)
     
     try:
-        client_socket.connect((SERVER_IP, SERVER_PORT))
-        print("[+] Conectado ao servidor.")
-    except ConnectionRefusedError:
-        print("[-] Não foi possível conectar ao servidor.")
-        return
-
-    try:
         while True:
-            # 1. Recebe os dados brutos da imagem
-            data = recv_msg(client_socket)
-            if not data:
+            #print("[DEBUG] Aguardando frame...")
+            jpeg_bytes = recv_frame(sock)
+            #print(f"[DEBUG] Tamanho do frame recebido: {len(jpeg_bytes) if jpeg_bytes else 0}")
+
+            if not jpeg_bytes:
+                print("[!] Frame vazio ou conexão encerrada.")
                 break
-            
-            # 2. Decodifica os bytes para uma imagem OpenCV
-            np_arr = np.frombuffer(data, dtype=np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            
-            if frame is not None:
-                # 3. Mostra a imagem na tela
-                cv2.imshow("Controle Remoto", frame)
-                
-                # Sai se apertar 'q'
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-            else:
-                print("[-] Erro ao decodificar frame.")
+
+            arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is None:
+                #print("[DEBUG] Frame decodificado é None, pulando.")
+                continue
+
+            cv2.imshow("Remote Screen", frame)
+
+            # Detecta ESC, q ou fechamento da janela
+            key = cv2.waitKey(10) & 0xFF
+            #print(f"[DEBUG] key = {key}")
+
+            # Se a janela foi fechada (em muitas builds, isso derruba a janela e gera erro em imshow na próxima iteração)
+            if cv2.getWindowProperty("Remote Screen", cv2.WND_PROP_VISIBLE) < 1:
+                #print("[DEBUG] Janela fechada (WND_PROP_VISIBLE < 1).")
+                break
+
+            # ESC (27) ou 'q'
+            if key in (27, ord('q')):
+                #print("[DEBUG] Saindo por ESC ou 'q'.")
+                break
+
+            # Ignora outros valores estranhos (como 255)
+            # if key == 255 ou key == -1 → continua o loop normalmente
 
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"[!] Erro no cliente: {e}")
     finally:
-        client_socket.close()
+        sock.close()
         cv2.destroyAllWindows()
+        print("[-] Cliente encerrado.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     start_client()

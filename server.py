@@ -3,10 +3,23 @@
 import socket
 import threading
 import json
+import sys
 
 import cv2
 import numpy as np
-import mss
+
+# Captura de tela: tenta mss primeiro (rápido no Windows), depois PIL (portável para Linux)
+try:
+    import mss
+    HAS_MSS = True
+except ImportError:
+    HAS_MSS = False
+
+try:
+    from PIL import ImageGrab
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 from protocol import create_server_socket, send_frame, recv_frame
 from pynput.mouse import Controller as MouseController, Button
@@ -20,58 +33,164 @@ mouse = MouseController()
 keyboard = KeyboardController()
 
 
+def capture_screen_mss(sct):
+    """Captura tela usando mss (rápido no Windows)."""
+    monitor = sct.monitors[1]  # monitor principal
+    screenshot = sct.grab(monitor)
+    frame_bgra = np.array(screenshot)
+    frame = cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2BGR)
+    return frame, monitor["width"], monitor["height"]
+
+
+def capture_screen_pil():
+    """Captura tela usando PIL/Pillow (portável para Linux e macOS)."""
+    screenshot = ImageGrab.grab()
+    frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+    # Usa o tamanho exato da captura (inclui DPI scaling se existir)
+    width, height = screenshot.size
+    return frame, width, height
+
+
+def get_screen_resolution():
+    """Obtém resolução da tela usando a biblioteca disponível."""
+    if HAS_MSS:
+        try:
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                return monitor["width"], monitor["height"]
+        except Exception:
+            pass
+    
+    if HAS_PIL:
+        try:
+            screenshot = ImageGrab.grab()
+            return screenshot.size
+        except Exception:
+            pass
+    
+    # Fallback
+    return 1920, 1080
+
+
 def capture_and_send_loop(conn: socket.socket, addr):
     """Captura a tela e envia frames JPEG + info de resolução."""
     print(f"[+] Cliente conectado (vídeo): {addr}")
 
+    # Tenta usar mss primeiro, depois PIL
+    use_mss = False
+    use_pil = False
+    sct = None
+    
     try:
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]  # monitor principal
-            server_w = monitor["width"]
-            server_h = monitor["height"]
+        # Tenta inicializar mss
+        if HAS_MSS:
+            try:
+                sct = mss.mss()
+                monitor = sct.monitors[1]
+                server_w = monitor["width"]
+                server_h = monitor["height"]
+                
+                # Tenta fazer uma captura de teste para garantir que funciona
+                test_screenshot = sct.grab(monitor)
+                use_mss = True
+                print(f"[+] Usando mss para captura de tela (resolução: {server_w}x{server_h})")
+            except Exception as e:
+                print(f"[!] mss falhou (esperado no Linux sem X11): {e}")
+                if sct:
+                    sct.close()
+                    sct = None
+                use_mss = False
+        
+        # Se mss falhou ou não está disponível, tenta PIL
+        if not use_mss and HAS_PIL:
+            try:
+                screenshot = ImageGrab.grab()
+                # IMPORTANTE: PIL.ImageGrab retorna a resolução da captura (com scaling)
+                # Para mouse mapping correto, usa-se exatamente este tamanho
+                server_w, server_h = screenshot.size
+                use_pil = True
+                print(f"[+] Usando PIL/Pillow para captura de tela (resolução física: {server_w}x{server_h})")
+            except Exception as e:
+                print(f"[!] PIL também falhou: {e}")
+                use_pil = False
+        
+        # Se nenhuma funcionou, erro fatal
+        if not use_mss and not use_pil:
+            raise RuntimeError(
+                "Nenhuma biblioteca de captura funcionou! "
+                "Verifique se 'mss' (com X11/Wayland) ou 'Pillow' está instalado."
+            )
 
-            # 0. Envia info de resolução para o cliente (uma vez)
-            info = json.dumps({
-                "type": "screen_info",
-                "width": server_w,
-                "height": server_h,
-            }).encode("utf-8")
-            send_frame(conn, info)
+        # 0. Envia info de resolução para o cliente (uma vez)
+        info = json.dumps({
+            "type": "screen_info",
+            "width": server_w,
+            "height": server_h,
+        }).encode("utf-8")
+        send_frame(conn, info)
+        
+        print(f"[+] Enviando frames em resolução: {server_w}x{server_h}")
 
+        # Loop de captura com mss
+        if use_mss:
             while True:
-                # 1. Captura tela (raw pixels)
-                screenshot = sct.grab(monitor)
+                try:
+                    frame, _, _ = capture_screen_mss(sct)
+                    
+                    # Comprime em JPEG
+                    ok, buffer = cv2.imencode(
+                        ".jpg",
+                        frame,
+                        [cv2.IMWRITE_JPEG_QUALITY, 50],
+                    )
+                    if not ok:
+                        continue
 
-                # 2. Converte para numpy array
-                frame_bgra = np.array(screenshot)
+                    jpeg_bytes = buffer.tobytes()
+                    send_frame(conn, jpeg_bytes)
+                
+                except Exception as e:
+                    print(f"[!] Erro ao capturar/enviar com mss: {e}")
+                    break
+        
+        # Loop de captura com PIL
+        elif use_pil:
+            while True:
+                try:
+                    frame, _, _ = capture_screen_pil()
+                    
+                    # Comprime em JPEG
+                    ok, buffer = cv2.imencode(
+                        ".jpg",
+                        frame,
+                        [cv2.IMWRITE_JPEG_QUALITY, 50],
+                    )
+                    if not ok:
+                        continue
 
-                # 3. BGRA -> BGR
-                frame = cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2BGR)
-
-                # 4. Comprime em JPEG
-                ok, buffer = cv2.imencode(
-                    ".jpg",
-                    frame,
-                    [cv2.IMWRITE_JPEG_QUALITY, 50],
-                )
-                if not ok:
-                    continue
-
-                jpeg_bytes = buffer.tobytes()
-
-                # 5. Envia via nosso framing manual
-                send_frame(conn, jpeg_bytes)
+                    jpeg_bytes = buffer.tobytes()
+                    send_frame(conn, jpeg_bytes)
+                    send_frame(conn, jpeg_bytes)
+                
+                except Exception as e:
+                    print(f"[!] Erro ao capturar/enviar com PIL: {e}")
+                    break
 
     except (ConnectionError, OSError) as e:
         print(f"[!] Conexão de vídeo com {addr} encerrada: {e}")
+    except RuntimeError as e:
+        print(f"[!] Erro de configuração: {e}")
     except Exception as e:
         print(f"[!] Erro inesperado no vídeo com {addr}: {e}")
     finally:
+        if sct:
+            sct.close()
         conn.close()
         print(f"[-] Cliente desconectado (vídeo): {addr}")
 
 
-def handle_input_conn(conn: socket.socket, addr):
+
+def handle_input_conn(conn: socket.socket, addr, capture_mode: str = "unknown"):
     """Recebe comandos de mouse/teclado do cliente e aplica na máquina."""
     print(f"[INPUT] Cliente conectado (input): {addr}")
     try:
@@ -86,7 +205,9 @@ def handle_input_conn(conn: socket.socket, addr):
 
             if etype == "mouse_move":
                 x, y = msg["x"], msg["y"]
-                mouse.position = (x, y)
+                # As coordenadas já vêm escaladas corretamente do cliente
+                # porque o cliente usa as dimensões do frame recebido
+                mouse.position = (int(x), int(y))
 
             elif etype == "mouse_click":
                 button = Button.left if msg["button"] == "left" else Button.right

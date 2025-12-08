@@ -6,17 +6,16 @@ import json
 
 from protocol import create_client_socket, recv_frame, send_frame
 
-SERVER_HOST = "127.0.0.1"  # ajustar para IP do servidor
+SERVER_HOST = "192.168.15.42"  # ajustar para IP do servidor
 SERVER_PORT = 9999         # vídeo
 INPUT_PORT = 10000         # mouse/teclado
 
 _input_sock = None
+_current_frame = None  # Armazena o último frame para obter dimensões reais
 
-# resoluções
+# resoluções do servidor (atualizadas quando conecta)
 server_w = 1920
 server_h = 1080
-client_w = 800
-client_h = 600
 
 # estado de botões do mouse (para diferenciar press/release)
 mouse_buttons_down = {
@@ -37,12 +36,45 @@ def send_input(msg: dict):
 
 
 def scale_to_server(x, y):
-    """Converte coordenadas da janela (cliente) para coordenadas do servidor."""
-    if client_w == 0 or client_h == 0:
+    """
+    Converte coordenadas do mouse relativas ao frame exibido
+    para as coordenadas reais da tela do servidor.
+    
+    Crucial: O frame exibido pode ter QUALQUER tamanho (redimensionado pela janela)
+    mas o frame_decoded será SEMPRE na resolução enviada pelo servidor.
+    Usamos as dimensões do frame decodificado (não da janela).
+    """
+    global _current_frame, server_w, server_h
+    
+    if _current_frame is None:
         return 0, 0
-    sx = x * (server_w / client_w)
-    sy = y * (server_h / client_h)
-    return int(sx), int(sy)
+    
+    # Dimensões DO FRAME DECODIFICADO (sempre na resolução do servidor após JPEG decode)
+    frame_h, frame_w = _current_frame.shape[:2]
+    
+    if frame_w == 0 or frame_h == 0:
+        return 0, 0
+    
+    # IMPORTANTE: OpenCV callback NÃO normaliza as coordenadas
+    # Ele as retorna na escala do frame conforme EXIBIDO na janela
+    # Se a janela está redimensionada, as coords vêm redimensionadas também
+    
+    # Solução: Converter primeiro para [0,1] normalizado, depois para coordenadas servidor
+    norm_x = x / frame_w if frame_w > 0 else 0
+    norm_y = y / frame_h if frame_h > 0 else 0
+    
+    # Aplicar ao tamanho real do servidor
+    sx = int(norm_x * server_w)
+    sy = int(norm_y * server_h)
+    
+    # Garante que não sai dos limites
+    sx = max(0, min(sx, server_w - 1))
+    sy = max(0, min(sy, server_h - 1))
+    
+    # Debug - DESCOMENTE para verificar
+    print(f"[DBG] frame({frame_w}x{frame_h}) mouse({x:.0f},{y:.0f}) -> norm({norm_x:.3f},{norm_y:.3f}) -> server({server_w}x{server_h}) ({sx},{sy})")
+    
+    return sx, sy
 
 
 # ==========================
@@ -124,7 +156,7 @@ def mouse_callback(event, x, y, flags, param):
 # ==========================
 
 def start_client():
-    global _input_sock, server_w, server_h, client_w, client_h
+    global _input_sock, _current_frame, server_w, server_h
 
     # 1) Conecta no socket de vídeo
     sock = create_client_socket(SERVER_HOST, SERVER_PORT)
@@ -144,8 +176,8 @@ def start_client():
 
     # 4) Cria janela e registra callback de mouse
     cv2.namedWindow("Remote Screen", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Remote Screen", client_w, client_h)
-    cv2.setMouseCallback("Remote Screen", mouse_callback)  # só eventos dentro da janela [web:43][web:51]
+    cv2.resizeWindow("Remote Screen", 800, 600)  # Tamanho inicial da janela
+    cv2.setMouseCallback("Remote Screen", mouse_callback)  # só eventos dentro da janela
 
     try:
         while True:
@@ -159,8 +191,8 @@ def start_client():
             if frame is None:
                 continue
 
-            # atualiza client_w/h com base no frame real
-            client_h, client_w = frame.shape[:2]
+            # Armazena o frame atual para usar na conversão de coordenadas
+            _current_frame = frame
 
             cv2.imshow("Remote Screen", frame)
 

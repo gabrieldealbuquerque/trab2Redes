@@ -6,7 +6,7 @@ import json
 
 from protocol import create_client_socket, recv_frame, send_frame
 
-SERVER_HOST = "192.168.15.42"  # ajustar para IP do servidor
+SERVER_HOST = "127.0.0.1"  # ajustar para IP do servidor
 SERVER_PORT = 9999         # vídeo
 INPUT_PORT = 10000         # mouse/teclado
 

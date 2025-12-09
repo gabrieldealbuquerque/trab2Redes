@@ -1,4 +1,3 @@
-````markdown
 # trab2Redes - Remote Desktop via Sockets TCP
 
 > **Projeto educacional de acesso remoto estilo TeamViewer, implementado do zero em Python**
@@ -212,7 +211,55 @@ O servidor tenta capturar com `mss` e, se falhar, faz fallback para `Pillow` aut
 {"type": "key_press", "key": "a"}
 ```
 
-## 🎯 Conceitos de Rede Demonstrados
+## 🔧 Detalhes Técnicos de Implementação
+
+### Problema: DPI Scaling no Linux com Pillow
+
+**O Problema:**
+Quando usando `Pillow` no Linux (fallback do `mss`), há um problema crítico de alinhamento de mouse:
+
+- **PIL captura em pixels FÍSICOS** - Se o monitor tem scaling 1.5x, PIL captura 2560x1600 (físicos)
+- **pynput espera coordenadas LÓGICAS** - mas o sistema oferece 1706x1066 (lógicos)
+- **Mismatch de coordenadas** - Mouse é enviado para a posição errada na tela
+
+**A Solução Implementada:**
+
+1. **Detectar resolução lógica via `xrandr`:**
+   ```bash
+   xrandr --current
+   # Output: HDMI-1 connected 1706x1066+0+0
+   ```
+
+2. **Redimensionar frame PIL para resolução lógica:**
+   ```python
+   # PIL captura: 2561x1601 (físico)
+   # xrandr reporta: 1706x1066 (lógico)
+   # Redimensiona para: 1706x1066 ← Alinhado com pynput!
+   frame = cv2.resize(frame, (logical_w, logical_h))
+   ```
+
+3. **Cliente recebe coordenadas corretas:**
+   ```python
+   # Frame é sempre na resolução lógica
+   # Conversão: frame_pixels -> servidor_pixels (1:1)
+   # Mouse mapping funciona perfeitamente!
+   ```
+
+### Compatibilidade Cross-Platform
+
+**Windows:**
+- `mss` funciona perfeitamente (pixels lógicos = físicos)
+- Sem problemas de scaling
+- Velocidade máxima
+
+**Linux/macOS:**
+- `mss` com X11/Wayland pode ter problemas de `XGetImage()`
+- Fallback para `Pillow` + detecção de DPI via `xrandr`
+- Funciona em qualquer ambiente
+
+---
+
+## Conceitos 
 
 1. **Sockets TCP** - Comunicação confiável orientada a conexão
 2. **Framing** - Delineamento de mensagens em streams
@@ -221,7 +268,7 @@ O servidor tenta capturar com `mss` e, se falhar, faz fallback para `Pillow` aut
 5. **Big Endian** - Padrão de rede para inteiros multi-byte
 6. **Escalabilidade** - Threads independentes por cliente
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### "ModuleNotFoundError: No module named 'mss'"
 ```bash
@@ -239,23 +286,12 @@ pip install Pillow
 - Teste com `127.0.0.1` primeiro
 
 ### Vídeo com lag/lento
-- Reduzir a qualidade JPEG: alterar `50` para `30` em `server.py` linha ~118
+- Reduzir a qualidade JPEG: alterar `50` para `30` em `server.py` linha 181
 - Usar uma rede mais rápida
-- Reduzir resolução do stream (futura feature)
 
 ### "XGetImage failed" no Linux
 - Use `Pillow` - o servidor faz fallback automático
 - Certifique-se que `libx11-dev` está instalado se quiser usar `mss`
-
-## 📊 Performance Esperada
-
-| Métrica | Valor |
-|---------|-------|
-| FPS | 20-30 (rede local) |
-| Latência | <100ms (LAN) |
-| Uso de Banda | ~500 KB/s (qualidade 50%) |
-| CPU Host | 5-15% |
-| CPU Cliente | 10-20% |
 
 ## 📝 Estrutura de Código
 
@@ -271,26 +307,3 @@ send_input_loop()          # Thread: captura input local
 mouse_callback()           # Callback: mouse events
 key_callback()             # Callback: keyboard events
 ```
-
-## 🔐 Segurança
-
-⚠️ **Aviso de Segurança**: Este projeto é **educacional**. Para uso em produção:
-- Adicione autenticação (usuário/senha)
-- Use encriptação TLS/SSL
-- Valide todos os inputs
-- Implemente rate limiting
-
-## 📚 Referências
-
-- [Python Socket Documentation](https://docs.python.org/3/library/socket.html)
-- [RFC 793 - TCP Protocol](https://tools.ietf.org/html/rfc793)
-- [OpenCV Python Docs](https://docs.opencv.org/master/d6/d00/tutorial_py_root.html)
-- [pynput Library](https://pynput.readthedocs.io/)
-
-## 📄 Licença
-
-Verificar arquivo `LICENSE`
-
----
-
-**Desenvolvido como projeto educacional de Redes de Computadores**

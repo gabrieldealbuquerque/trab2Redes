@@ -39,40 +39,25 @@ def scale_to_server(x, y):
     """
     Converte coordenadas do mouse relativas ao frame exibido
     para as coordenadas reais da tela do servidor.
-    
-    Crucial: O frame exibido pode ter QUALQUER tamanho (redimensionado pela janela)
-    mas o frame_decoded será SEMPRE na resolução enviada pelo servidor.
-    Usamos as dimensões do frame decodificado (não da janela).
     """
     global _current_frame, server_w, server_h
     
     if _current_frame is None:
         return 0, 0
     
-    # Dimensões DO FRAME DECODIFICADO (sempre na resolução do servidor após JPEG decode)
+    # Dimensões DO FRAME DECODIFICADO
     frame_h, frame_w = _current_frame.shape[:2]
     
     if frame_w == 0 or frame_h == 0:
         return 0, 0
     
-    # IMPORTANTE: OpenCV callback NÃO normaliza as coordenadas
-    # Ele as retorna na escala do frame conforme EXIBIDO na janela
-    # Se a janela está redimensionada, as coords vêm redimensionadas também
-    
-    # Solução: Converter primeiro para [0,1] normalizado, depois para coordenadas servidor
-    norm_x = x / frame_w if frame_w > 0 else 0
-    norm_y = y / frame_h if frame_h > 0 else 0
-    
-    # Aplicar ao tamanho real do servidor
-    sx = int(norm_x * server_w)
-    sy = int(norm_y * server_h)
+    # Converter proporcional do frame para servidor
+    sx = int(x * (server_w / frame_w))
+    sy = int(y * (server_h / frame_h))
     
     # Garante que não sai dos limites
     sx = max(0, min(sx, server_w - 1))
     sy = max(0, min(sy, server_h - 1))
-    
-    # Debug - DESCOMENTE para verificar
-    print(f"[DBG] frame({frame_w}x{frame_h}) mouse({x:.0f},{y:.0f}) -> norm({norm_x:.3f},{norm_y:.3f}) -> server({server_w}x{server_h}) ({sx},{sy})")
     
     return sx, sy
 

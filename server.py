@@ -51,6 +51,37 @@ def capture_screen_pil():
     return frame, width, height
 
 
+def get_logical_resolution_pil():
+    """
+    Obtém resolução LÓGICA (não física) no Linux.
+    PIL captura em pixels físicos com scaling, mas pynput usa lógicos.
+    """
+    try:
+        import subprocess
+        # Tenta xrandr para obter resolução lógica
+        result = subprocess.run(['xrandr', '--current'], 
+                              capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                # Procura por "connected primary X"xY" ou similar
+                if 'connected primary' in line or (' connected ' in line and 'x' in line):
+                    # Parse: "HDMI-1 connected 2560x1440+0+0" -> pega "2560x1440"
+                    parts = line.split()
+                    for part in parts:
+                        if 'x' in part and part[0].isdigit():
+                            try:
+                                w_str, h_str = part.split('x')[0], part.split('x')[1].split('+')[0]
+                                w, h = int(w_str), int(h_str)
+                                if w > 0 and h > 0:
+                                    return w, h
+                            except:
+                                pass
+    except Exception:
+        pass
+    
+    return None, None
+
+
 def get_screen_resolution():
     """Obtém resolução da tela usando a biblioteca disponível."""
     if HAS_MSS:
@@ -105,11 +136,17 @@ def capture_and_send_loop(conn: socket.socket, addr):
         if not use_mss and HAS_PIL:
             try:
                 screenshot = ImageGrab.grab()
-                # IMPORTANTE: PIL.ImageGrab retorna a resolução da captura (com scaling)
-                # Para mouse mapping correto, usa-se exatamente este tamanho
                 server_w, server_h = screenshot.size
+                
+                # IMPORTANTE: No Linux, PIL captura em pixels FÍSICOS (com DPI scaling)
+                # mas pynput trabalha em pixels LÓGICOS. Precisa redimensionar.
+                logical_w, logical_h = get_logical_resolution_pil()
+                if logical_w and logical_h and (logical_w != server_w or logical_h != server_h):
+                    print(f"[+] Redimensionando PIL: {server_w}x{server_h} (físico) -> {logical_w}x{logical_h} (lógico)")
+                    server_w, server_h = logical_w, logical_h
+                
                 use_pil = True
-                print(f"[+] Usando PIL/Pillow para captura de tela (resolução física: {server_w}x{server_h})")
+                print(f"[+] Usando PIL/Pillow para captura de tela (resolução: {server_w}x{server_h})")
             except Exception as e:
                 print(f"[!] PIL também falhou: {e}")
                 use_pil = False
@@ -157,7 +194,11 @@ def capture_and_send_loop(conn: socket.socket, addr):
         elif use_pil:
             while True:
                 try:
-                    frame, _, _ = capture_screen_pil()
+                    frame, w, h = capture_screen_pil()
+                    
+                    # Se a captura é em pixels FÍSICOS mas server_w/h são LÓGICOS, redimensiona
+                    if w != server_w or h != server_h:
+                        frame = cv2.resize(frame, (server_w, server_h), interpolation=cv2.INTER_LINEAR)
                     
                     # Comprime em JPEG
                     ok, buffer = cv2.imencode(
@@ -169,7 +210,6 @@ def capture_and_send_loop(conn: socket.socket, addr):
                         continue
 
                     jpeg_bytes = buffer.tobytes()
-                    send_frame(conn, jpeg_bytes)
                     send_frame(conn, jpeg_bytes)
                 
                 except Exception as e:
